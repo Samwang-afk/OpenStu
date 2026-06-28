@@ -9,6 +9,7 @@ import type { TutorService } from "../core/tutor"
 import type { SourceService } from "../core/source-service"
 import { searchOfficialSources } from "../adapters/search"
 import type { StartupDecision, StartupOptionBox } from "../core/startup"
+import { classifyAskResponseStyle } from "../core/clarification"
 import { ACTION_REGISTRY, type ActionDefinition, isActionAvailable } from "./actions"
 
 interface DisplayMessage {
@@ -502,6 +503,14 @@ export function OpenStuApp(props: AppProps) {
       return
     }
 
+    if (key.name === "escape" && modelSetup()) {
+      key.preventDefault()
+      setModelSetup(undefined)
+      appendMessage("system", "已取消模型配置。")
+      setNotice("已取消模型配置")
+      return
+    }
+
     if (key.name === "tab") {
       key.preventDefault()
       key.stopPropagation()
@@ -620,6 +629,7 @@ export function OpenStuApp(props: AppProps) {
           brief: {},
           history: [],
           sources: [],
+          askStyle: classifyAskResponseStyle(text),
           style: style(),
           signal: controller.signal,
         },
@@ -702,7 +712,7 @@ export function OpenStuApp(props: AppProps) {
     setModelSetup({ step: "provider", config: {} })
     appendMessage(
       "system",
-      "选择模型服务：\n1. OpenAI-compatible（OpenAI、DeepSeek 等）\n2. Anthropic\n3. Google Gemini\n4. Ollama（本地）\n\n输入序号或名称；输入 /model cancel 取消。",
+      "选择模型服务：\n1. OpenAI-compatible（OpenAI、DeepSeek 等）\n2. Anthropic\n3. Google Gemini\n4. Ollama（本地）\n\n输入序号或名称，按 Esc 取消。",
     )
     setNotice("模型配置 · 选择 provider")
   }
@@ -1032,7 +1042,7 @@ export function OpenStuApp(props: AppProps) {
               changeMode(key.shift ? -1 : 1)
             }}
             keyBindings={COMPOSER_KEY_BINDINGS}
-            placeholder={modelSetup()?.step === "key" ? "粘贴 API Key（不会保存）" : onboardingFlow()?.type === "add_materials" ? "粘贴文件路径或 URL…" : onboardingFlow()?.type === "create_subject" ? "输入课程名称…" : onboardingFlow()?.type === "switch_subject" ? "输入序号或课程名称…" : generating() ? "生成中，Ctrl+C 取消…" : "输入消息或按 Ctrl+X"}
+            placeholder={modelSetup()?.step === "key" ? "粘贴 API Key（不会回显）" : onboardingFlow()?.type === "add_materials" ? "粘贴文件路径或 URL…" : onboardingFlow()?.type === "create_subject" ? "输入课程名称…" : onboardingFlow()?.type === "switch_subject" ? "输入序号或课程名称…" : generating() ? "生成中，Ctrl+C 取消…" : "输入消息或按 Ctrl+X"}
             placeholderColor={palette().muted}
             backgroundColor={palette().inputBackground}
             focusedBackgroundColor={palette().inputBackground}

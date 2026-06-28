@@ -115,4 +115,28 @@ describe("OpenStu TUI", () => {
     expect(frame).not.toContain("**bold**")
     setup.renderer.destroy()
   })
+
+  test("model setup starts provider selection and shows Esc cancellation", async () => {
+    database = new OpenStuDatabase(":memory:")
+    const course = database.createCourse("Physics")
+    const session = database.createSession(course.id, "ask")
+    const modelMock = { connected: false, config: undefined, capabilities: { streaming: false, structuredOutput: false } } as unknown as TutorModel
+    const setup = await testRender(
+      () => (
+        <OpenStuApp
+          database={database!}
+          tutor={{} as TutorService}
+          model={modelMock}
+          sourceService={{} as SourceService}
+          initialCourse={course}
+          initialSessionId={session}
+        />
+      ),
+      { width: 70, height: 20 },
+    )
+    await setup.renderOnce()
+    await setup.flush()
+    expect(setup.captureCharFrame()).toContain("未连接 · /model")
+    setup.renderer.destroy()
+  })
 })
