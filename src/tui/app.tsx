@@ -599,6 +599,47 @@ export function OpenStuApp(props: AppProps) {
     }
   }
 
+  const directAsk = async (text: string) => {
+    if (!props.model.config || !props.model.connected) {
+      appendMessage("system", "尚未配置模型。按 Ctrl+X → Configure provider 开始连接。")
+      return
+    }
+    appendMessage("user", text)
+    const assistantId = appendMessage("assistant", "")
+    const controller = new AbortController()
+    setAbortController(controller)
+    setGenerating(true)
+    setNotice("Ask 正在生成…")
+    let streamed = ""
+    try {
+      const result = await props.model.streamReply(
+        {
+          mode: "ask",
+          input: text,
+          courseName: "General",
+          brief: {},
+          history: [],
+          sources: [],
+          style: style(),
+          signal: controller.signal,
+        },
+        (delta) => {
+          streamed += delta
+          updateMessage(assistantId, streamed)
+        },
+      )
+      updateMessage(assistantId, result)
+      setNotice("回答完成")
+    } catch (error) {
+      const cancelled = controller.signal.aborted
+      updateMessage(assistantId, cancelled ? `${streamed}\n\n[已取消]`.trim() : `错误：${formatError(error)}`)
+      setNotice(cancelled ? "已取消" : "请求失败")
+    } finally {
+      setGenerating(false)
+      setAbortController(undefined)
+    }
+  }
+
   const submit = async (value: string) => {
     const text = value.trim()
     if (!text || generating()) return
@@ -617,6 +658,10 @@ export function OpenStuApp(props: AppProps) {
     }
 
     if (!course()) {
+      if (mode() === "ask") {
+        await directAsk(text)
+        return
+      }
       appendMessage("system", "还没有选择课程。按 Ctrl+X 创建或选择一个课程。")
       return
     }
