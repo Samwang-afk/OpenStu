@@ -9,7 +9,7 @@ import type { TutorService } from "../core/tutor"
 import type { SourceService } from "../core/source-service"
 import { searchOfficialSources } from "../adapters/search"
 import type { StartupDecision, StartupOptionBox } from "../core/startup"
-import { ACTION_REGISTRY, type ActionDefinition } from "./actions"
+import { ACTION_REGISTRY, type ActionDefinition, isActionAvailable } from "./actions"
 
 interface DisplayMessage {
   id: string
@@ -121,6 +121,13 @@ export function OpenStuApp(props: AppProps) {
   }
 
   const paletteHandler = (action: ActionDefinition): (() => void) => {
+    const context = { hasCourse: !!course(), hasCourses: props.database.listCourses().length > 0 }
+    if (!isActionAvailable(action, context)) {
+      return () => {
+        closePalette()
+        appendMessage("system", "请先创建或选择一个课程，然后才能使用此功能。")
+      }
+    }
     switch (action.id) {
       case "switch_course": return () => { closePalette(); switchSubjectAction() }
       case "create_course": return () => { closePalette(); createSubjectAction() }
@@ -181,6 +188,15 @@ export function OpenStuApp(props: AppProps) {
   }
 
   const addMaterialsAction = () => {
+    if (!course()) {
+      const courses = props.database.listCourses()
+      if (courses.length > 0) {
+        appendMessage("system", "请先选择一个课程，然后再导入资料。输入 /course <名称> 切换课程。")
+      } else {
+        appendMessage("system", "还没有课程。请先输入 /course new <名称> 创建课程，然后再导入资料。")
+      }
+      return
+    }
     appendMessage("system", "输入 /add <文件路径或 URL> 导入学习资料。")
   }
 
