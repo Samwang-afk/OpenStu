@@ -585,6 +585,13 @@ export function OpenStuApp(props: AppProps) {
           results.map((result) => result.status === "imported" ? `已导入 ${result.title}（${result.chunks} 个片段）` : `导入失败 ${result.input}：${result.error}`).join("\n"),
         )
         setNotice("导入完成")
+        const imported = results.some((r) => r.status === "imported")
+        if (imported && course()) {
+          const hasPlan = props.database.listPlan(course()!.id).length > 0
+          if (!hasPlan) {
+            appendMessage("system", "资料已导入，现在可以创建学习计划了。按 Ctrl+X → Make plan / Replan 开始。")
+          }
+        }
       } finally {
         setGenerating(false)
       }
