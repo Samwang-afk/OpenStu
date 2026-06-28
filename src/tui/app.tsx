@@ -85,6 +85,9 @@ export function OpenStuApp(props: AppProps) {
     props.initialDecision?.type === "choice" ? props.initialDecision : null,
   )
   const [startupChoiceIndex, setStartupChoiceIndex] = createSignal(0)
+  const [pendingDefaultAction, setPendingDefaultAction] = createSignal<string | null>(
+    props.initialDecision?.type === "message" ? (props.initialDecision.defaultAction ?? null) : null,
+  )
 
   const palette = () => PALETTES[style().theme]
   const modelView = () => {
@@ -218,6 +221,35 @@ export function OpenStuApp(props: AppProps) {
     appendMessage("system", "已进入考前突击模式。描述考试范围和时间，AI 将优先覆盖高频考点。")
   }
 
+  const executeDefaultAction = (action: string) => {
+    switch (action) {
+      case "review_due": {
+        if (!course()) return
+        setMode("review")
+        props.database.setCourseMode(course()!.id, "review")
+        props.database.setSessionMode(sessionId()!, "review")
+        appendMessage("system", "已进入 Review 模式。将开始复习到期知识点。")
+        break
+      }
+      case "continue_learning": {
+        if (!course()) return
+        setMode("first")
+        props.database.setCourseMode(course()!.id, "first")
+        props.database.setSessionMode(sessionId()!, "first")
+        appendMessage("system", "已进入 First 模式。继续学习下一个计划知识点。")
+        break
+      }
+      case "exam_review": {
+        if (!course()) return
+        setMode("noob")
+        props.database.setCourseMode(course()!.id, "noob")
+        props.database.setSessionMode(sessionId()!, "noob")
+        appendMessage("system", "已进入考前突击模式。描述考试范围和时间，AI 将优先覆盖高频考点。")
+        break
+      }
+    }
+  }
+
   const executeStartupChoice = () => {
     const choice = startupChoice()
     if (!choice) return
@@ -242,6 +274,15 @@ export function OpenStuApp(props: AppProps) {
         break
       case "import_materials":
       case "add_materials":
+        if (!course()) {
+          const courses = props.database.listCourses()
+          if (courses.length > 0) {
+            appendMessage("system", "请先选择一个课程，然后再导入资料。输入 /course <名称> 切换课程。")
+          } else {
+            appendMessage("system", "还没有课程。请先输入 /course new <名称> 创建课程，然后再导入资料。")
+          }
+          return
+        }
         appendMessage("system", "输入 /add <文件路径或 URL> 导入学习资料。")
         break
       case "rough_plan":
@@ -348,11 +389,30 @@ export function OpenStuApp(props: AppProps) {
         return
       }
       if (key.name === "return" || key.name === "kpenter") {
+        const hasInput = (composer?.plainText ?? "").trim().length > 0
+        if (hasInput) return
         key.preventDefault()
         executeStartupChoice()
         return
       }
-      return
+      if (key.name === "tab") {
+        key.preventDefault()
+        key.stopPropagation()
+        return
+      }
+    }
+
+    if (key.name === "return" || key.name === "kpenter") {
+      const hasInput = (composer?.plainText ?? "").trim().length > 0
+      if (!hasInput) {
+        const action = pendingDefaultAction()
+        if (action) {
+          key.preventDefault()
+          setPendingDefaultAction(null)
+          executeDefaultAction(action)
+          return
+        }
+      }
     }
 
     if (key.name === "tab") {
@@ -771,7 +831,7 @@ export function OpenStuApp(props: AppProps) {
             focusedBackgroundColor={palette().inputBackground}
             textColor={modelSetup()?.step === "key" ? palette().inputBackground : palette().text}
             focusedTextColor={modelSetup()?.step === "key" ? palette().inputBackground : palette().text}
-            focused={!generating() && !paletteOpen() && !startupChoice()}
+            focused={!generating() && !paletteOpen()}
             width="100%"
             height={3}
           />

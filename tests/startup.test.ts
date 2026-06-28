@@ -54,6 +54,31 @@ describe("isDeadlineClose", () => {
   test("returns false for within-30-days", () => {
     expect(isDeadlineClose("within-30-days")).toBe(false)
   })
+
+  test("returns true for a date 2 days away", () => {
+    const ref = new Date("2026-06-25T12:00:00.000Z")
+    expect(isDeadlineClose("2026-06-27", ref)).toBe(true)
+  })
+
+  test("returns true for ISO datetime within 7 days", () => {
+    const ref = new Date("2026-06-25T12:00:00.000Z")
+    expect(isDeadlineClose("2026-07-01T00:00:00.000Z", ref)).toBe(true)
+  })
+
+  test("returns false for a date more than 7 days away", () => {
+    const ref = new Date("2026-06-25T12:00:00.000Z")
+    expect(isDeadlineClose("2026-07-10", ref)).toBe(false)
+  })
+
+  test("returns false for invalid date strings", () => {
+    expect(isDeadlineClose("not-a-date", new Date("2026-06-25T12:00:00.000Z"))).toBe(false)
+    expect(isDeadlineClose("", new Date("2026-06-25T12:00:00.000Z"))).toBe(false)
+  })
+
+  test("returns false for past dates", () => {
+    const ref = new Date("2026-06-25T12:00:00.000Z")
+    expect(isDeadlineClose("2026-06-20", ref)).toBe(false)
+  })
 })
 
 describe("decideStartup", () => {
@@ -163,6 +188,7 @@ describe("decideStartup", () => {
     if (decision.type === "message") {
       expect(decision.content).toContain("due before continuing")
       expect(decision.content).toContain("Optics")
+      expect(decision.defaultAction).toBe("review_due")
     }
   })
 
@@ -188,6 +214,7 @@ describe("decideStartup", () => {
       expect(decision.content).toContain("Continue with")
       expect(decision.content).toContain("Mechanics")
       expect(decision.content).toContain("Press Enter to start")
+      expect(decision.defaultAction).toBe("continue_learning")
     }
   })
 

@@ -13,6 +13,7 @@ export type StartupDecision = StartupDirectMessage | StartupOptionBox
 export interface StartupDirectMessage {
   type: "message"
   content: string
+  defaultAction?: string
 }
 
 export interface StartupOptionBox {
@@ -98,7 +99,7 @@ function handlePlanState(
   now: Date,
   brief: CourseRecord["brief"],
 ): StartupDecision {
-  const deadlineClose = isDeadlineClose(brief.deadline)
+  const deadlineClose = isDeadlineClose(brief.deadline, now)
 
   if (deadlineClose) {
     return {
@@ -127,6 +128,7 @@ function handlePlanState(
     return {
       type: "message",
       content: `You have ${count} thing${count > 1 ? "s" : ""} due before continuing ${weakest.title}. I'll start with the weaker one.\n\nPress Enter to start.`,
+      defaultAction: "review_due",
     }
   }
 
@@ -135,6 +137,7 @@ function handlePlanState(
     return {
       type: "message",
       content: `Continue with ${nextTopic.title}. I'll start with one quick question to check the prerequisite.\n\nPress Enter to start.`,
+      defaultAction: "continue_learning",
     }
   }
 
@@ -144,7 +147,11 @@ function handlePlanState(
   }
 }
 
-export function isDeadlineClose(deadline: string | undefined): boolean {
+export function isDeadlineClose(deadline: string | undefined, now: Date = new Date()): boolean {
   if (!deadline || deadline === "no-deadline") return false
-  return deadline === "within-7-days"
+  if (deadline === "within-7-days") return true
+  const date = new Date(deadline)
+  if (Number.isNaN(date.getTime())) return false
+  const diffMs = date.getTime() - now.getTime()
+  return diffMs >= 0 && diffMs <= 7 * 24 * 60 * 60 * 1000
 }
