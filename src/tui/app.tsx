@@ -434,8 +434,8 @@ export function OpenStuApp(props: AppProps) {
   )
 }
 
-export async function runTui(props: AppProps): Promise<void> {
-  await render(() => <OpenStuApp {...props} />, { exitOnCtrlC: false, targetFps: 30 })
+export async function runTui(props: AppProps, onDestroy?: () => void): Promise<void> {
+  await render(() => <OpenStuApp {...props} />, { exitOnCtrlC: false, targetFps: 30, onDestroy })
 }
 
 function formatError(error: unknown): string {

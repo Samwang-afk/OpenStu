@@ -41,17 +41,21 @@ try {
     )
   }
 
-  await runTui({
-    database,
-    tutor,
-    model,
-    sourceService,
-    initialCourse: course,
-    initialSessionId: sessionId,
-    initialNotices: notices,
-  })
-} finally {
+  await runTui(
+    {
+      database,
+      tutor,
+      model,
+      sourceService,
+      initialCourse: course,
+      initialSessionId: sessionId,
+      initialNotices: notices,
+    },
+    () => database.close(),
+  )
+} catch (error) {
   database.close()
+  throw error
 }
 
 function parseArguments(args: string[]): { courseName?: string; sources: string[] } {
