@@ -12,7 +12,8 @@ import { searchOfficialSources } from "../adapters/search"
 interface DisplayMessage {
   id: string
   role: MessageRecord["role"]
-  content: string
+  content: () => string
+  setContent: (content: string) => void
 }
 
 interface ModelSetup {
@@ -25,54 +26,238 @@ export interface AppProps {
   tutor: TutorService
   model: TutorModel
   sourceService: SourceService
-  initialCourse: CourseRecord
-  initialSessionId: string
+  initialCourse: CourseRecord | null
+  initialSessionId: string | null
   initialNotices?: string[]
+}
+
+interface PaletteAction {
+  label: string
+  handler: () => void
+}
+
+function createDisplayMessage(
+  role: DisplayMessage["role"],
+  initialContent: string,
+  id: string = crypto.randomUUID(),
+): DisplayMessage {
+  const [content, setContent] = createSignal(initialContent)
+  return { id, role, content, setContent }
 }
 
 export function OpenStuApp(props: AppProps) {
   const renderer = useRenderer()
   let composer: TextareaRenderable | undefined
-  const syntaxStyle = SyntaxStyle.create()
+  const syntaxStyle = SyntaxStyle.fromStyles({
+    default: {},
+    markup: {},
+    "markup.heading": { bold: true },
+    "markup.strong": { bold: true },
+    "markup.italic": { italic: true },
+    "markup.link": { underline: true },
+  })
   onCleanup(() => syntaxStyle.destroy())
-  const [course, setCourse] = createSignal(props.initialCourse)
-  const [sessionId, setSessionId] = createSignal(props.initialSessionId)
-  const [mode, setMode] = createSignal<TutorMode>(props.initialCourse.mode)
+
+  const [course, setCourse] = createSignal<CourseRecord | null>(props.initialCourse)
+  const [sessionId, setSessionId] = createSignal<string | null>(props.initialSessionId)
+  const [mode, setMode] = createSignal<TutorMode>(props.initialCourse?.mode ?? "ask")
   const [draft, setDraft] = createSignal("")
-  const [style, setStyle] = createSignal(props.database.getStylePreferences(props.initialCourse.id))
+  const [style, setStyle] = createSignal(
+    props.initialCourse ? props.database.getStylePreferences(props.initialCourse.id) : FALLBACK_STYLE,
+  )
   const [modelSetup, setModelSetup] = createSignal<ModelSetup>()
   const [modelRevision, setModelRevision] = createSignal(0)
   const [generating, setGenerating] = createSignal(false)
-  const [notice, setNotice] = createSignal("Tab 切换模式 · Ctrl+D 退出")
+  const [notice, setNotice] = createSignal("Ctrl+X Actions · Enter 发送 · Shift+Enter 换行")
   const [abortController, setAbortController] = createSignal<AbortController>()
   const [messages, setMessages] = createSignal<DisplayMessage[]>([
-    ...(props.initialNotices ?? []).map((content) => ({ id: crypto.randomUUID(), role: "system" as const, content })),
-    ...props.database.listMessages(props.initialSessionId).map(({ id, role, content }) => ({ id, role, content })),
+    ...(props.initialNotices ?? []).map((content) => createDisplayMessage("system", content)),
+    ...(props.initialSessionId ? props.database.listMessages(props.initialSessionId).map(({ id, role, content }) => createDisplayMessage(role, content, id)) : []),
   ])
+
+  const [paletteOpen, setPaletteOpen] = createSignal(false)
+  const [paletteFilter, setPaletteFilter] = createSignal("")
+  const [paletteIndex, setPaletteIndex] = createSignal(0)
+
   const palette = () => PALETTES[style().theme]
   const modelView = () => {
     modelRevision()
     return props.model.config
   }
+
+  const statusOnline = () => props.model.connected
+  const subjectDisplay = () => (course() ? course()!.name : "No Subject")
+
   onMount(() => composer?.focus())
 
   const changeMode = (direction: -1 | 1) => {
+    if (!course()) return
     const result = switchMode(mode(), direction, generating())
     if (!result.changed) {
       setNotice(result.notice!)
       return
     }
     setMode(result.mode)
-    props.database.setCourseMode(course().id, result.mode)
-    props.database.setSessionMode(sessionId(), result.mode)
-    props.database.recordEvent(course().id, sessionId(), "mode_switched", { mode: result.mode })
+    props.database.setCourseMode(course()!.id, result.mode)
+    props.database.setSessionMode(sessionId()!, result.mode)
+    props.database.recordEvent(course()!.id, sessionId()!, "mode_switched", { mode: result.mode })
     setNotice(`已切换到 ${modeLabel(result.mode)} 模式`)
   }
 
+  const getPaletteActions = (): PaletteAction[] => [
+    { label: "Switch subject", handler: () => { closePalette(); switchSubjectAction() } },
+    { label: "Create subject", handler: () => { closePalette(); createSubjectAction() } },
+    { label: "Add materials", handler: () => { closePalette(); addMaterialsAction() } },
+    { label: "Configure provider", handler: () => { closePalette(); void startModelSetup() } },
+    { label: "View progress", handler: () => { closePalette(); viewProgressAction() } },
+    { label: "View sources", handler: () => { closePalette(); viewSourcesAction() } },
+    { label: "Make plan / Replan", handler: () => { closePalette(); planAction() } },
+    { label: "Start exam review", handler: () => { closePalette(); examReviewAction() } },
+    { label: "Help", handler: () => { closePalette(); appendMessage("system", HELP) } },
+    { label: "Quit", handler: () => renderer.destroy() },
+  ]
+
+  const filteredActions = () => {
+    const filter = paletteFilter().toLowerCase()
+    const all = getPaletteActions()
+    if (!filter) return all
+    return all.filter((action) => action.label.toLowerCase().includes(filter))
+  }
+
+  const closePalette = () => {
+    setPaletteOpen(false)
+    setPaletteFilter("")
+    setPaletteIndex(0)
+  }
+
+  const openPalette = () => {
+    setPaletteOpen(true)
+    setPaletteFilter("")
+    setPaletteIndex(0)
+  }
+
+  const executePaletteAction = (index: number) => {
+    const actions = filteredActions()
+    if (index >= 0 && index < actions.length) {
+      actions[index].handler()
+    }
+  }
+
+  const switchSubjectAction = () => {
+    const courses = props.database.listCourses()
+    if (!courses.length) {
+      appendMessage("system", "还没有任何课程。使用 Ctrl+X → Create subject 创建一个。")
+      return
+    }
+    appendMessage("system", courses.map((c) => `- ${c.name}${c.id === (course()?.id ?? "") ? "（当前）" : ""}`).join("\n"))
+    appendMessage("system", "输入 /course <名称> 切换课程。")
+  }
+
+  const createSubjectAction = () => {
+    appendMessage("system", "输入 /course new <名称> 创建新课程。")
+  }
+
+  const addMaterialsAction = () => {
+    appendMessage("system", "输入 /add <文件路径或 URL> 导入学习资料。")
+  }
+
+  const viewProgressAction = () => {
+    if (!course()) {
+      appendMessage("system", "请先创建或选择一个课程。")
+      return
+    }
+    const topics = props.database.listPlan(course()!.id)
+    appendMessage(
+      "system",
+      topics.length
+        ? topics.map((topic, index) => `${index + 1}. [${topic.status}] ${topic.title} · 阶段 ${topic.stage}${topic.dueAt ? ` · ${topic.dueAt.slice(0, 10)}` : ""}`).join("\n")
+        : "还没有已确认的计划。在 Plan 模式下输入问题，AI 生成路线后输入“确认计划”保存。",
+    )
+  }
+
+  const viewSourcesAction = () => {
+    if (!course()) {
+      appendMessage("system", "请先创建或选择一个课程。")
+      return
+    }
+    const sources = props.database.listSources(course()!.id)
+    appendMessage("system", sources.length ? sources.map((source) => `- ${source.title} · ${source.kind} · ${source.metadata.trust}\n  ${source.uri}`).join("\n") : "还没有资料。使用 Ctrl+X → Add materials 导入。")
+  }
+
+  const planAction = () => {
+    if (!course()) {
+      appendMessage("system", "请先创建或选择一个课程。")
+      return
+    }
+    setMode("plan")
+    props.database.setCourseMode(course()!.id, "plan")
+    props.database.setSessionMode(sessionId()!, "plan")
+    appendMessage("system", "已进入 Plan 模式。描述学习目标，AI 将生成学习路线。完成后输入“确认计划”保存。")
+  }
+
+  const examReviewAction = () => {
+    if (!course()) {
+      appendMessage("system", "请先创建或选择一个课程。")
+      return
+    }
+    setMode("noob")
+    props.database.setCourseMode(course()!.id, "noob")
+    props.database.setSessionMode(sessionId()!, "noob")
+    appendMessage("system", "已进入考前突击模式。描述考试范围和时间，AI 将优先覆盖高频考点。")
+  }
+
   useKeyboard((key) => {
+    if (key.ctrl && key.name === "x") {
+      key.preventDefault()
+      paletteOpen() ? closePalette() : openPalette()
+      return
+    }
+
+    if (paletteOpen()) {
+      if (key.name === "escape") {
+        key.preventDefault()
+        closePalette()
+        return
+      }
+      if (key.name === "up") {
+        key.preventDefault()
+        setPaletteIndex((current) => Math.max(0, current - 1))
+        return
+      }
+      if (key.name === "down") {
+        key.preventDefault()
+        setPaletteIndex((current) => Math.min(filteredActions().length - 1, current + 1))
+        return
+      }
+      if (key.name === "return" || key.name === "kpenter") {
+        key.preventDefault()
+        executePaletteAction(paletteIndex())
+        return
+      }
+      if (key.name === "backspace") {
+        key.preventDefault()
+        setPaletteFilter((current) => current.slice(0, -1))
+        setPaletteIndex(0)
+        return
+      }
+      if (key.name === "tab") {
+        key.preventDefault()
+        key.stopPropagation()
+        return
+      }
+      if (typeof key.name === "string" && key.name.length === 1 && !key.ctrl && !key.meta) {
+        key.preventDefault()
+        setPaletteFilter((current) => current + key.name)
+        setPaletteIndex(0)
+        return
+      }
+      return
+    }
+
     if (key.name === "tab") {
       key.preventDefault()
       key.stopPropagation()
+      if (!course()) return
       changeMode(key.shift ? -1 : 1)
     }
     if (key.ctrl && key.name === "c" && generating()) {
@@ -87,12 +272,12 @@ export function OpenStuApp(props: AppProps) {
   })
 
   const appendMessage = (role: DisplayMessage["role"], content: string, id = crypto.randomUUID()) => {
-    setMessages((current) => [...current, { id, role, content }])
+    setMessages((current) => [...current, createDisplayMessage(role, content, id)])
     return id
   }
 
   const updateMessage = (id: string, content: string) => {
-    setMessages((current) => current.map((message) => (message.id === id ? { ...message, content } : message)))
+    messages().find((message) => message.id === id)?.setContent(content)
   }
 
   const submit = async (value: string) => {
@@ -108,6 +293,11 @@ export function OpenStuApp(props: AppProps) {
       return
     }
 
+    if (!course()) {
+      appendMessage("system", "还没有选择课程。按 Ctrl+X 创建或选择一个课程。")
+      return
+    }
+
     appendMessage("user", text)
     const assistantId = appendMessage("assistant", "")
     const controller = new AbortController()
@@ -115,30 +305,23 @@ export function OpenStuApp(props: AppProps) {
     setGenerating(true)
     setNotice(`${modeLabel(mode())} 正在生成…`)
     let streamed = ""
-    let streamTimer: ReturnType<typeof setTimeout> | undefined
-    const flushStream = () => {
-      streamTimer = undefined
-      updateMessage(assistantId, streamed)
-    }
     try {
       const result = await props.tutor.handleTurn({
-        courseId: course().id,
-        sessionId: sessionId(),
+        courseId: course()!.id,
+        sessionId: sessionId()!,
         mode: mode(),
         text,
         signal: controller.signal,
         onDelta(delta) {
           streamed += delta
-          streamTimer ??= setTimeout(flushStream, 80)
+          updateMessage(assistantId, streamed)
         },
       })
-      if (streamTimer) clearTimeout(streamTimer)
       updateMessage(assistantId, result.text)
       if (result.notice) appendMessage("system", result.notice)
       setNotice(result.citations.length ? `引用 ${result.citations.length} 个资料片段` : "回答完成")
     } catch (error) {
       const cancelled = controller.signal.aborted
-      if (streamTimer) clearTimeout(streamTimer)
       updateMessage(assistantId, cancelled ? `${streamed}\n\n[已取消]`.trim() : `错误：${formatError(error)}`)
       setNotice(cancelled ? "已取消当前回答，学习状态未更新" : "请求失败，学习状态未更新")
     } finally {
@@ -147,7 +330,7 @@ export function OpenStuApp(props: AppProps) {
     }
   }
 
-  const startModelSetup = () => {
+  const startModelSetup = async () => {
     setModelSetup({ step: "provider", config: {} })
     appendMessage(
       "system",
@@ -224,7 +407,7 @@ export function OpenStuApp(props: AppProps) {
     } catch (error) {
       setModelRevision((value) => value + 1)
       appendMessage("system", formatError(error))
-      setNotice("模型连接失败；输入 /model 重试")
+      setNotice("模型连接失败；Ctrl+X → Configure provider 重试")
     } finally {
       setGenerating(false)
     }
@@ -233,21 +416,25 @@ export function OpenStuApp(props: AppProps) {
   const handleCommand = async (text: string) => {
     const [command, ...parts] = text.slice(1).split(/\s+/)
     const argument = parts.join(" ").trim()
-    if (command === "quit") return renderer.destroy()
+    if (command === "quit" || command === "exit") return renderer.destroy()
     if (command === "help") {
       appendMessage("system", HELP)
       return
     }
     if (command === "mode") {
+      if (!course()) {
+        appendMessage("system", "请先创建或选择一个课程。")
+        return
+      }
       const requested = argument.toLowerCase() as TutorMode
       if (!MODES.includes(requested)) {
         appendMessage("system", `可用模式：${MODES.join(", ")}`)
         return
       }
       setMode(requested)
-      props.database.setCourseMode(course().id, requested)
-      props.database.setSessionMode(sessionId(), requested)
-      props.database.recordEvent(course().id, sessionId(), "mode_switched", { mode: requested })
+      props.database.setCourseMode(course()!.id, requested)
+      props.database.setSessionMode(sessionId()!, requested)
+      props.database.recordEvent(course()!.id, sessionId()!, "mode_switched", { mode: requested })
       setNotice(`已切换到 ${modeLabel(requested)} 模式`)
       return
     }
@@ -256,12 +443,20 @@ export function OpenStuApp(props: AppProps) {
       return
     }
     if (command === "sources") {
-      const sources = props.database.listSources(course().id)
+      if (!course()) {
+        appendMessage("system", "请先创建或选择一个课程。")
+        return
+      }
+      const sources = props.database.listSources(course()!.id)
       appendMessage("system", sources.length ? sources.map((source) => `- ${source.title} · ${source.kind} · ${source.metadata.trust}\n  ${source.uri}`).join("\n") : "还没有资料。使用 /add <路径或 URL> 导入。")
       return
     }
     if (command === "progress") {
-      const topics = props.database.listPlan(course().id)
+      if (!course()) {
+        appendMessage("system", "请先创建或选择一个课程。")
+        return
+      }
+      const topics = props.database.listPlan(course()!.id)
       appendMessage(
         "system",
         topics.length
@@ -279,12 +474,12 @@ export function OpenStuApp(props: AppProps) {
         setModelSetup(undefined)
         setNotice("已取消模型配置")
       } else if (!props.model.config || argument === "setup") {
-        startModelSetup()
+        void startModelSetup()
       } else {
         const config = props.model.config
         appendMessage(
           "system",
-          `当前模型：${config.provider}/${config.model}${config.baseURL ? `\n${config.baseURL}` : ""}\nconnected=${props.model.connected} · streaming=${props.model.capabilities.streaming} · structuredOutput=${props.model.capabilities.structuredOutput}${props.model.lastError ? `\n${props.model.lastError}` : ""}\n输入 /model setup 重新配置。`,
+          `当前模型：${config.provider}/${config.model}${config.baseURL ? `\n${config.baseURL}` : ""}\nconnected=${props.model.connected} · streaming=${props.model.capabilities.streaming} · structuredOutput=${props.model.capabilities.structuredOutput}${props.model.lastError ? `\n${props.model.lastError}` : ""}\nCtrl+X → Configure provider 可重新连接。`,
         )
       }
       return
@@ -293,12 +488,12 @@ export function OpenStuApp(props: AppProps) {
       await handleAddCommand(argument)
       return
     }
-    appendMessage("system", `未知命令：/${command}\n输入 /help 查看帮助。`)
+    appendMessage("system", `未知命令：/${command}\n按 Ctrl+X 或输入 /help 查看帮助。`)
   }
 
   const handleCourseCommand = (argument: string) => {
     if (!argument) {
-      appendMessage("system", props.database.listCourses().map((item) => `- ${item.name}${item.id === course().id ? "（当前）" : ""}`).join("\n"))
+      appendMessage("system", props.database.listCourses().map((item) => `- ${item.name}${item.id === (course()?.id ?? "") ? "（当前）" : ""}`).join("\n"))
       return
     }
     const isNew = argument.startsWith("new ")
@@ -315,17 +510,21 @@ export function OpenStuApp(props: AppProps) {
     setSessionId(nextSession)
     setMode(next.mode)
     setStyle(props.database.getStylePreferences(next.id))
-    setMessages([{ id: crypto.randomUUID(), role: "system", content: `已进入课程：${next.name}` }])
+    setMessages([createDisplayMessage("system", `已进入课程：${next.name}`)])
   }
 
   const handleStyleCommand = (argument: string) => {
-    const style = props.database.getStylePreferences(course().id)
+    if (!course()) {
+      appendMessage("system", "请先创建或选择一个课程。")
+      return
+    }
+    const currentStyle = props.database.getStylePreferences(course()!.id)
     if (!argument) {
-      appendMessage("system", Object.entries(style).map(([key, value]) => `${key}=${value}`).join("\n"))
+      appendMessage("system", Object.entries(currentStyle).map(([key, value]) => `${key}=${value}`).join("\n"))
       return
     }
     const [key, value] = argument.split("=", 2)
-    if (!value || !(key in style)) {
+    if (!value || !(key in currentStyle)) {
       appendMessage("system", "格式：/style <theme|sequence|verbosity|stepSize|challenge|analogyDensity>=<值>")
       return
     }
@@ -333,14 +532,18 @@ export function OpenStuApp(props: AppProps) {
       appendMessage("system", `可用主题：${THEMES.join(", ")}`)
       return
     }
-    props.database.updateStylePreference(course().id, key as keyof StylePreferences, value)
-    setStyle(props.database.getStylePreferences(course().id))
+    props.database.updateStylePreference(course()!.id, key as keyof StylePreferences, value)
+    setStyle(props.database.getStylePreferences(course()!.id))
     appendMessage("system", `已更新 ${key}=${value}`)
   }
 
   const handleAddCommand = async (argument: string) => {
     if (!argument) {
       appendMessage("system", "格式：/add <文件、目录或 URL>；联网搜索：/add search <课程名>")
+      return
+    }
+    if (!course()) {
+      appendMessage("system", "请先创建或选择一个课程。")
       return
     }
     if (argument.startsWith("search ")) {
@@ -363,7 +566,7 @@ export function OpenStuApp(props: AppProps) {
 
     setGenerating(true)
     try {
-      const results = await props.sourceService.import(course().id, [argument], setNotice)
+      const results = await props.sourceService.import(course()!.id, [argument], setNotice)
       appendMessage(
         "system",
         results.map((result) => result.status === "imported" ? `已导入 ${result.title}（${result.chunks} 个片段）` : `导入失败 ${result.input}：${result.error}`).join("\n"),
@@ -377,9 +580,9 @@ export function OpenStuApp(props: AppProps) {
   return (
     <box flexDirection="column" width="100%" height="100%" padding={1} gap={1}>
       <box flexDirection="row" justifyContent="space-between">
-        <text fg={palette().accent}><strong>OpenStu</strong> · {course().name}</text>
-        <text fg={props.model.connected ? "#79c99e" : "#e06c75"}>
-          {props.model.connected ? "●" : "●"} {modelView() ? `${modelView()!.provider}/${modelView()!.model}` : "未连接 · /model"}
+        <text fg={palette().accent}><strong>OpenStu</strong> · {subjectDisplay()}</text>
+        <text fg={statusOnline() ? "#79c99e" : "#e06c75"}>
+          {statusOnline() ? "●" : "●"} {modelView() ? `${modelView()!.provider}/${modelView()!.model}` : (course() ? "未连接 · /model" : "offline")}
         </text>
       </box>
 
@@ -390,8 +593,13 @@ export function OpenStuApp(props: AppProps) {
               <text fg={message.role === "user" ? palette().user : message.role === "assistant" ? palette().accent : palette().muted}>
                 <strong>{message.role === "user" ? "You" : message.role === "assistant" ? "OpenStu" : "System"}</strong>
               </text>
-              <Show when={message.content} fallback={<text fg={palette().muted}>…</text>}>
-                <markdown content={message.content} conceal={false} syntaxStyle={syntaxStyle} />
+              <Show when={message.content()} fallback={<text fg={palette().muted}>…</text>}>
+                <markdown
+                  content={message.content()}
+                  fg={palette().text}
+                  streaming
+                  syntaxStyle={syntaxStyle}
+                />
               </Show>
             </box>
           )}
@@ -399,12 +607,24 @@ export function OpenStuApp(props: AppProps) {
       </scrollbox>
 
       <box flexDirection="column">
-        <box flexDirection="row" justifyContent="space-between">
-          <text fg={palette().badgeText} bg={palette().accent}>
-            <strong>{` ● ${modeLabel(mode()).toUpperCase()} `}</strong>
-          </text>
-          <text fg={palette().muted}>Tab / Shift+Tab 切换模式</text>
-        </box>
+        <Show when={paletteOpen()} fallback={<text />}>
+          <box border borderStyle="rounded" borderColor={palette().accent} padding={1} minHeight={14} marginBottom={1}>
+            <text fg={palette().accent}><strong>Actions</strong>  {paletteFilter() ? `· "${paletteFilter()}"` : "· type to filter"}</text>
+            <box height={1} />
+            <For each={filteredActions()}>
+              {(action, index) => (
+                <box flexDirection="row">
+                  <text fg={index() === paletteIndex() ? palette().accent : palette().text}>
+                    {index() === paletteIndex() ? "> " : "  "}{action.label}
+                  </text>
+                </box>
+              )}
+            </For>
+            <Show when={filteredActions().length === 0} fallback={<text />}>
+              <text fg={palette().muted}>No matching actions</text>
+            </Show>
+          </box>
+        </Show>
         <box border borderStyle="rounded" borderColor={palette().border} paddingLeft={1} paddingRight={1} height={5} marginTop={1}>
           <textarea
             ref={(value) => {
@@ -421,21 +641,24 @@ export function OpenStuApp(props: AppProps) {
               if (key.name !== "tab") return
               key.preventDefault()
               key.stopPropagation()
+              if (!course()) return
               changeMode(key.shift ? -1 : 1)
             }}
             keyBindings={COMPOSER_KEY_BINDINGS}
-            placeholder={modelSetup()?.step === "key" ? "粘贴 API Key（不会保存）" : generating() ? "生成中，Ctrl+C 取消…" : "输入消息或 /help"}
+            placeholder={modelSetup()?.step === "key" ? "粘贴 API Key（不会保存）" : generating() ? "生成中，Ctrl+C 取消…" : "输入消息或按 Ctrl+X"}
             placeholderColor={palette().muted}
             backgroundColor={palette().inputBackground}
             focusedBackgroundColor={palette().inputBackground}
             textColor={modelSetup()?.step === "key" ? palette().inputBackground : palette().text}
             focusedTextColor={modelSetup()?.step === "key" ? palette().inputBackground : palette().text}
-            focused={!generating()}
+            focused={!generating() && !paletteOpen()}
             width="100%"
             height={3}
           />
         </box>
-        <text fg={palette().muted}>{notice()} · Enter 发送 · Shift+Enter 换行</text>
+        <Show when={paletteOpen()} fallback={<text fg={palette().muted}>{notice()}</text>}>
+          <text fg={palette().muted}>Esc 关闭 · ↑↓ 选择 · Enter 执行 · 直接输入过滤</text>
+        </Show>
       </box>
     </box>
   )
@@ -493,6 +716,15 @@ const PALETTES: Record<
   },
 }
 
+const FALLBACK_STYLE: StylePreferences = {
+  theme: "cyan",
+  sequence: "balanced",
+  verbosity: "normal",
+  stepSize: "medium",
+  challenge: "balanced",
+  analogyDensity: "medium",
+}
+
 function parseProvider(value: string): ModelProvider | undefined {
   const normalized = value.trim().toLowerCase()
   return {
@@ -517,16 +749,25 @@ function isHttpURL(value: string): boolean {
   }
 }
 
-const HELP = `/course — 列出课程
-/course new <名称> — 新建课程
-/add <路径或 URL> — 导入资料
-/add search <课程名> — 搜索官方资料候选
-/mode <plan|first|review|noob|ask> — 切换模式
-/sources — 查看资料
-/progress — 查看学习计划
-/style theme=<cyan|violet|amber> — 切换主题
-/style [键=值] — 查看或修改呈现偏好
-/model — 查看或连接模型
-/model setup — 重新连接模型
-/help — 查看帮助
-/quit — 退出`
+const HELP = `OpenStu · 快捷帮助
+
+主要操作：
+  Ctrl+X — 打开 Actions 面板（切换课程、创建课程、导入资料、配置模型等）
+  Enter  — 发送消息
+  Shift+Enter — 换行
+  Ctrl+C — 取消当前生成
+  Esc   — 关闭面板
+
+命令：
+  /course                  — 列出课程
+  /course new <名称>        — 新建课程
+  /add <路径或 URL>         — 导入资料
+  /add search <课程名>      — 搜索官方资料候选
+  /mode <plan|first|review|noob|ask> — 切换模式
+  /sources                  — 查看资料
+  /progress                 — 查看学习计划
+  /style theme=<cyan|violet|amber> — 切换主题
+  /style [键=值]            — 查看或修改呈现偏好
+  /model                    — 查看或连接模型
+  /help                     — 查看帮助
+  /quit                     — 退出`

@@ -10,12 +10,12 @@ const { courseName, sources } = parseArguments(Bun.argv.slice(2))
 const database = new OpenStuDatabase()
 
 try {
+  const existingCourses = database.listCourses()
   const existing = courseName
-    ? database.listCourses().find((course) => course.name.toLowerCase() === courseName.toLowerCase())
-    : database.listCourses()[0]
-  const inferredName = courseName || inferCourseName(sources) || "New Course"
-  const course = existing ?? database.createCourse(inferredName)
-  const sessionId = database.createSession(course.id, course.mode)
+    ? existingCourses.find((course) => course.name.toLowerCase() === courseName.toLowerCase())
+    : existingCourses[0]
+  const inferredName = courseName || inferCourseName(sources)
+  const course = existing ?? (inferredName || sources.length ? database.createCourse(inferredName || "New Course") : undefined)
   const notices: string[] = []
   const model = new TutorModel()
   if (model.config) {
@@ -24,13 +24,15 @@ try {
     } catch (error) {
       notices.push(error instanceof Error ? error.message : String(error))
     }
+  } else if (!course) {
+    notices.push("尚未连接模型。按 Ctrl+X → Configure provider 开始连接。")
   } else {
     notices.push("尚未连接模型。输入 /model 在界面内配置。")
   }
   const tutor = new TutorService(database, model)
   const sourceService = new SourceService(database)
 
-  if (sources.length) {
+  if (course && sources.length) {
     const results = await sourceService.import(course.id, sources)
     notices.push(
       ...results.map((result) =>
@@ -47,8 +49,8 @@ try {
       tutor,
       model,
       sourceService,
-      initialCourse: course,
-      initialSessionId: sessionId,
+      initialCourse: course ?? null,
+      initialSessionId: course ? database.createSession(course.id, course.mode) : null,
       initialNotices: notices,
     },
     () => database.close(),
