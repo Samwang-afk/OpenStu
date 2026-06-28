@@ -1,6 +1,6 @@
 import { applyClarificationDefaults, answerClarification, classifyAskResponseStyle, isAmbiguousAsk, nextClarification } from "./clarification"
 import { applyDiagnosis, masteryFor, validateDiagnosis } from "./learning"
-import type { AssessmentRubric, Citation, DiagnosisCandidate, TopicProgress, TutorMode } from "./types"
+import type { AssessmentRubric, Citation, DiagnosisCandidate, SearchResult, TopicProgress, TutorMode } from "./types"
 import { OpenStuDatabase, type PlanTopic } from "../adapters/database"
 import type { TutorModelPort } from "../adapters/model"
 import { searchOfficialSources } from "../adapters/search"
@@ -165,8 +165,13 @@ export class TutorService {
     }
 
     const query = topic ? `${topic.title} ${input.text}` : input.text
-    const sources = this.database.searchChunks(course.id, query)
-    const citations = sources.map((source) => ({ sourceId: source.sourceId, chunkId: source.id, locator: source.locator }))
+    let sources: SearchResult[] = []
+    try {
+      sources = this.database.searchChunks(course.id, query)
+    } catch (error) {
+      input.onDelta("")
+    }
+    const citations: Citation[] = sources.map((source) => ({ sourceId: source.sourceId, chunkId: source.id, locator: source.locator, sourceTitle: source.sourceTitle }))
     const history = this.database.listMessages(input.sessionId).map(({ role, content }) => ({ role, content }))
     let streamed = ""
     let text: string

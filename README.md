@@ -1,51 +1,105 @@
 # OpenStu
 
-Local-first AI learning CLI for course planning, first-pass learning, spaced review, exam cramming, and source-grounded questions.
+Local-first AI learning TUI. Ask questions, get answers grounded in your own study materials.
 
-## Run
+**Alpha v0.1.0** — core Q&A loop with source citations. Planning, formal assessment, and spaced review are not yet stabilized.
 
-Requires [Bun](https://bun.sh/) for development:
+## Quick Start
+
+Requires [Bun](https://bun.sh/) >= 1.3:
 
 ```powershell
+git clone https://github.com/Samwang-afk/OpenStu.git
+cd OpenStu
 bun install
-bun run dev -- --course "CIE A-Level Physics" .\materials
+bun run dev
 ```
 
-Or build a standalone executable:
+Build a standalone executable:
 
 ```powershell
 bun run build
-.\dist\openstu.exe --course "CIE A-Level Physics"
+.\dist\openstu.exe
 ```
 
-Install the standalone executable for direct use from a new terminal:
+Or install globally:
 
 ```powershell
 bun run install:local
 openstu
 ```
 
-`openstu` reopens the most recent course. Files, directories, and public URLs can be passed as positional arguments.
+## Alpha Scope
 
-## Models
+OpenStu Alpha lets you:
 
-When no configured provider is available, OpenStu opens normally and asks you to enter `/model`. The in-app setup accepts a temporary API key that is masked and never written to disk. Environment variables remain the persistent option:
+1. Create a subject (Ctrl+X → Create subject)
+2. Add study materials — Markdown, TXT, PDF, DOCX, PPTX, web pages
+3. Configure an AI provider (Ctrl+X → Configure provider)
+4. Ask questions and receive answers grounded in your materials
+5. See source citations when materials are relevant
+
+## Basic Workflow
 
 ```powershell
-$env:OPENSTU_PROVIDER="openai-compatible"
-$env:OPENSTU_MODEL="deepseek-chat"
-$env:OPENAI_BASE_URL="https://api.deepseek.com/v1"
-$env:OPENAI_API_KEY="..."
+# Launch
+bun run dev
+
+# 1. Create a subject
+#    Ctrl+X → Create subject → type "Physics" → Enter
+
+# 2. Add materials
+#    Ctrl+X → Add materials → type "./notes.pdf" → Enter
+
+# 3. Configure provider
+#    Ctrl+X → Configure provider → select provider → follow prompts
+
+# 4. Ask a question
+#    Type "Explain Newton's laws" → Enter
+
+# Answers include source citations when materials are relevant:
+#   Sources:
+#   [1] Physics notes · 第 3 页
 ```
 
-Supported providers and keys:
+### No course? Start with a question.
 
-- `openai-compatible`: `OPENAI_API_KEY`, optional `OPENAI_BASE_URL`
-- `anthropic`: `ANTHROPIC_API_KEY`
-- `google`: `GOOGLE_GENERATIVE_AI_API_KEY` or `GOOGLE_API_KEY`
-- `ollama`: optional `OLLAMA_BASE_URL`, default `http://localhost:11434/v1`
+You can ask questions without a subject selected. The assistant answers directly without material context.
 
-Model settings may also be stored without credentials in `config.json`:
+## Provider Setup
+
+### Via TUI (Ctrl+X → Configure provider)
+
+Supported providers: OpenAI-compatible (OpenAI, DeepSeek, etc.), Anthropic, Google Gemini, Ollama.
+
+The in-app setup walks through: provider → model name → base URL (if needed) → API key.
+
+- **API key entered in TUI**: masked during entry (not echoed), used for the current session, not persisted to disk.
+- **Persistent API keys**: set via environment variables (see below).
+
+Press Esc at any step to cancel setup.
+
+### Via environment variables
+
+```powershell
+$env:OPENSTU_PROVIDER = "openai-compatible"
+$env:OPENSTU_MODEL = "deepseek-chat"
+$env:OPENAI_BASE_URL = "https://api.deepseek.com/v1"
+$env:OPENAI_API_KEY = "your-key"
+```
+
+Supported providers and their env vars:
+
+| Provider | Key env var | Optional base URL |
+|----------|------------|-------------------|
+| `openai-compatible` | `OPENAI_API_KEY` | `OPENAI_BASE_URL` |
+| `anthropic` | `ANTHROPIC_API_KEY` | — |
+| `google` | `GOOGLE_GENERATIVE_AI_API_KEY` | — |
+| `ollama` | — | `OLLAMA_BASE_URL` (default: `http://localhost:11434/v1`) |
+
+### Via config.json
+
+Provider, model, and base URL can be saved without credentials in `config.json`:
 
 ```json
 {
@@ -57,47 +111,44 @@ Model settings may also be stored without credentials in `config.json`:
 }
 ```
 
-The file is located under `%APPDATA%\openstu` on Windows, `~/Library/Application Support/openstu` on macOS, and `$XDG_CONFIG_HOME/openstu` or `~/.config/openstu` on Linux. Set `OPENSTU_CONFIG` to override the path.
+Location: `%APPDATA%\openstu` (Windows), `~/Library/Application Support/openstu` (macOS), `~/.config/openstu` (Linux). Set `OPENSTU_CONFIG` to override.
 
-## Modes
+## Main Controls
 
-The mode bar stays directly above the composer. Use `Tab` and `Shift+Tab` to cycle:
+| Key | Action |
+|-----|--------|
+| Ctrl+X | Open Action Palette (create subject, add materials, configure provider, etc.) |
+| Enter | Send message or select highlighted option |
+| Shift+Enter | New line |
+| Ctrl+C | Cancel current generation |
+| Esc | Close palette, option box, or cancel onboarding flow |
 
-- `Plan`: clarify the goal and draft a route; enter `确认计划` to persist it.
-- `First`: teach the next planned topic and diagnose the answer.
-- `Review`: select due or weak topics using 1/3/7/14/30-day intervals.
-- `Noob`: short-term, simplified exam coverage without claiming mastery.
-- `Ask`: source-grounded free questions; conceptual questions default to Socratic guidance.
+Slash commands (`/help`, `/course`, `/add`, `/model`, `/style`, `/progress`, `/sources`, `/quit`) are available but Ctrl+X is the recommended primary interface.
 
-Only the current mode is shown above the three-line composer. Press Enter to send and Shift+Enter for a new line. Switch the built-in color theme with `/style theme=cyan`, `/style theme=violet`, or `/style theme=amber`. Terminal fonts are controlled by the terminal; Cascadia Mono is recommended on Windows.
+## Alpha Safety Note
 
-## Commands
+- **Ordinary Ask does not update mastery, stage, or learning progress.** All Q&A is read-only with respect to learning state.
+- Formal assessment and diagnosis features exist in the codebase but are **not part of the Alpha experience.** They are hidden behind the old mode system and are not validated for production use.
+- All data stays in a local SQLite database. No accounts, no cloud sync, no telemetry.
 
-```text
-/course                    list courses
-/course new <name>         create and switch course
-/add <path|directory|URL>  import material
-/add search <course>       search official-source candidates with Tavily
-/mode <mode>               switch mode
-/sources                   list imported sources
-/progress                  show plan and review stages
-/style [key=value]         inspect or update presentation preferences
-/model                     show or connect a model
-/help                      show help
-/quit                      exit
-```
+## Supported Material Types
 
-Set `TAVILY_API_KEY` for official-source search. Search results are never imported automatically; review a candidate and confirm it with `/add <URL>`.
+Markdown, TXT, PDF, DOCX, PPTX, and public static web pages. Scanned PDFs, OCR, audio/video, and login-protected pages are out of scope.
 
-## Data and privacy
+## Known Limitations (Alpha)
 
-Course data, extracted text, messages, plans, and progress remain in a local SQLite database. API keys are read only from environment variables. There is no account, cloud sync, or telemetry.
-
-Supported material types are Markdown, TXT, PDF, DOCX, PPTX, and public static web pages. Scanned PDFs, OCR, audio/video, and login-protected pages are intentionally out of scope.
+- **No persistent API key storage.** Keys entered in the TUI are session-only. Use environment variables for persistence.
+- **No planning UI.** Internal planning logic exists but is not exposed through the new Action Palette UX. Use `/mode plan` or the old mode system if needed.
+- **No formal assessment or diagnosis in Alpha UX.** Assessment and review flows are accessible via `/mode first` and `/mode review` but are not part of the default interface.
+- **No sidebars.** All context (progress, sources, weak points) is accessed through commands or the Action Palette.
+- **No spaced repetition scheduling in the Alpha UX.**
+- **CJK source retrieval falls back to substring search** when FTS5 trigram/unicode61 tokenizers are unavailable.
+- **Windows-only build tested.** macOS and Linux untested in this Alpha.
 
 ## Development
 
 ```powershell
+bun install
 bun run typecheck
 bun test
 bun run build
