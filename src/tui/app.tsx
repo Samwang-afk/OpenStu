@@ -697,6 +697,12 @@ export function OpenStuApp(props: AppProps) {
       })
       updateMessage(assistantId, result.text)
       if (result.notice) appendMessage("system", result.notice)
+      if (result.citations.length > 0) {
+        const refs = result.citations
+          .map((c, i) => `[${i + 1}] ${c.sourceTitle ?? "source"} · ${c.locator}`)
+          .join("\n")
+        appendMessage("system", `Sources:\n${refs}`)
+      }
       setNotice(result.citations.length ? `引用 ${result.citations.length} 个资料片段` : "回答完成")
     } catch (error) {
       const cancelled = controller.signal.aborted
