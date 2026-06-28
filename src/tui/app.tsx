@@ -8,6 +8,7 @@ import { defaultModel, type ModelConfig, type ModelProvider, type TutorModel } f
 import type { TutorService } from "../core/tutor"
 import type { SourceService } from "../core/source-service"
 import { searchOfficialSources } from "../adapters/search"
+import type { StartupDecision, StartupOptionBox } from "../core/startup"
 
 interface DisplayMessage {
   id: string
@@ -29,6 +30,7 @@ export interface AppProps {
   initialCourse: CourseRecord | null
   initialSessionId: string | null
   initialNotices?: string[]
+  initialDecision?: StartupDecision | null
 }
 
 interface PaletteAction {
@@ -79,6 +81,11 @@ export function OpenStuApp(props: AppProps) {
   const [paletteFilter, setPaletteFilter] = createSignal("")
   const [paletteIndex, setPaletteIndex] = createSignal(0)
 
+  const [startupChoice, setStartupChoice] = createSignal<StartupOptionBox | null>(
+    props.initialDecision?.type === "choice" ? props.initialDecision : null,
+  )
+  const [startupChoiceIndex, setStartupChoiceIndex] = createSignal(0)
+
   const palette = () => PALETTES[style().theme]
   const modelView = () => {
     modelRevision()
@@ -88,7 +95,12 @@ export function OpenStuApp(props: AppProps) {
   const statusOnline = () => props.model.connected
   const subjectDisplay = () => (course() ? course()!.name : "No Subject")
 
-  onMount(() => composer?.focus())
+  onMount(() => {
+    composer?.focus()
+    if (props.initialDecision?.type === "message") {
+      appendMessage("system", props.initialDecision.content)
+    }
+  })
 
   const changeMode = (direction: -1 | 1) => {
     if (!course()) return
@@ -206,6 +218,70 @@ export function OpenStuApp(props: AppProps) {
     appendMessage("system", "已进入考前突击模式。描述考试范围和时间，AI 将优先覆盖高频考点。")
   }
 
+  const executeStartupChoice = () => {
+    const choice = startupChoice()
+    if (!choice) return
+    const option = choice.options[startupChoiceIndex()]
+    if (!option) return
+    setStartupChoice(null)
+    switch (option.value) {
+      case "open_recent": {
+        const courses = props.database.listCourses()
+        if (courses[0]) {
+          const nextSession = props.database.createSession(courses[0].id, courses[0].mode)
+          setCourse(courses[0])
+          setSessionId(nextSession)
+          setMode(courses[0].mode)
+          setStyle(props.database.getStylePreferences(courses[0].id))
+          setMessages([createDisplayMessage("system", `已进入课程：${courses[0].name}`)])
+        }
+        break
+      }
+      case "create_course":
+        appendMessage("system", "输入 /course new <名称> 创建新课程。")
+        break
+      case "import_materials":
+      case "add_materials":
+        appendMessage("system", "输入 /add <文件路径或 URL> 导入学习资料。")
+        break
+      case "rough_plan":
+      case "make_plan":
+        if (!course()) {
+          appendMessage("system", "请先创建或选择一个课程。")
+          return
+        }
+        setMode("plan")
+        props.database.setCourseMode(course()!.id, "plan")
+        props.database.setSessionMode(sessionId()!, "plan")
+        appendMessage("system", "已进入 Plan 模式。描述学习目标，AI 将生成学习路线。完成后输入“确认计划”保存。")
+        break
+      case "ask_question":
+      case "start_anyway":
+      case "continue_normally":
+        break
+      case "exam_review":
+        if (!course()) {
+          appendMessage("system", "请先创建或选择一个课程。")
+          return
+        }
+        setMode("noob")
+        props.database.setCourseMode(course()!.id, "noob")
+        props.database.setSessionMode(sessionId()!, "noob")
+        appendMessage("system", "已进入考前突击模式。描述考试范围和时间，AI 将优先覆盖高频考点。")
+        break
+      case "review_weak":
+        if (!course()) {
+          appendMessage("system", "请先创建或选择一个课程。")
+          return
+        }
+        setMode("review")
+        props.database.setCourseMode(course()!.id, "review")
+        props.database.setSessionMode(sessionId()!, "review")
+        appendMessage("system", "已进入 Review 模式。将开始复习弱项和到期知识点。")
+        break
+    }
+  }
+
   useKeyboard((key) => {
     if (key.ctrl && key.name === "x") {
       key.preventDefault()
@@ -249,6 +325,31 @@ export function OpenStuApp(props: AppProps) {
         key.preventDefault()
         setPaletteFilter((current) => current + key.name)
         setPaletteIndex(0)
+        return
+      }
+      return
+    }
+
+    if (startupChoice()) {
+      if (key.name === "escape") {
+        key.preventDefault()
+        setStartupChoice(null)
+        return
+      }
+      if (key.name === "left") {
+        key.preventDefault()
+        setStartupChoiceIndex((current) => Math.max(0, current - 1))
+        return
+      }
+      if (key.name === "right") {
+        key.preventDefault()
+        const choices = startupChoice()?.options ?? []
+        setStartupChoiceIndex((current) => Math.min(choices.length - 1, current + 1))
+        return
+      }
+      if (key.name === "return" || key.name === "kpenter") {
+        key.preventDefault()
+        executeStartupChoice()
         return
       }
       return
@@ -625,6 +726,25 @@ export function OpenStuApp(props: AppProps) {
             </Show>
           </box>
         </Show>
+        <Show when={startupChoice() != null} fallback={<text />}>
+          <box flexDirection="column" marginBottom={1}>
+            <text fg={palette().accent}><strong>OpenStu</strong></text>
+            <box height={1} />
+            <text fg={palette().text}>{startupChoice()?.message ?? ""}</text>
+            <box height={1} />
+            <box flexDirection="row" gap={2}>
+              <For each={startupChoice()?.options ?? []}>
+                {(option, index) => (
+                  <text fg={index() === startupChoiceIndex() ? palette().accent : palette().text}>
+                    {index() === startupChoiceIndex() ? "[" : " "}{option.label}{index() === startupChoiceIndex() ? "]" : " "}
+                  </text>
+                )}
+              </For>
+            </box>
+            <box height={1} />
+            <text fg={palette().muted}>Or type your question…</text>
+          </box>
+        </Show>
         <box border borderStyle="rounded" borderColor={palette().border} paddingLeft={1} paddingRight={1} height={5} marginTop={1}>
           <textarea
             ref={(value) => {
@@ -651,7 +771,7 @@ export function OpenStuApp(props: AppProps) {
             focusedBackgroundColor={palette().inputBackground}
             textColor={modelSetup()?.step === "key" ? palette().inputBackground : palette().text}
             focusedTextColor={modelSetup()?.step === "key" ? palette().inputBackground : palette().text}
-            focused={!generating() && !paletteOpen()}
+            focused={!generating() && !paletteOpen() && !startupChoice()}
             width="100%"
             height={3}
           />
