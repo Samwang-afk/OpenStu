@@ -9,6 +9,7 @@ import type { TutorService } from "../core/tutor"
 import type { SourceService } from "../core/source-service"
 import { searchOfficialSources } from "../adapters/search"
 import type { StartupDecision, StartupOptionBox } from "../core/startup"
+import { ACTION_REGISTRY, type ActionDefinition, isActionAvailable } from "./actions"
 
 interface DisplayMessage {
   id: string
@@ -20,6 +21,10 @@ interface DisplayMessage {
 interface ModelSetup {
   step: "provider" | "model" | "baseURL" | "key"
   config: Partial<ModelConfig>
+}
+
+interface OnboardingFlow {
+  type: "create_subject" | "switch_subject" | "add_materials"
 }
 
 export interface AppProps {
@@ -68,6 +73,7 @@ export function OpenStuApp(props: AppProps) {
     props.initialCourse ? props.database.getStylePreferences(props.initialCourse.id) : FALLBACK_STYLE,
   )
   const [modelSetup, setModelSetup] = createSignal<ModelSetup>()
+  const [onboardingFlow, setOnboardingFlow] = createSignal<OnboardingFlow>()
   const [modelRevision, setModelRevision] = createSignal(0)
   const [generating, setGenerating] = createSignal(false)
   const [notice, setNotice] = createSignal("Ctrl+X Actions · Enter 发送 · Shift+Enter 换行")
@@ -119,18 +125,32 @@ export function OpenStuApp(props: AppProps) {
     setNotice(`已切换到 ${modeLabel(result.mode)} 模式`)
   }
 
-  const getPaletteActions = (): PaletteAction[] => [
-    { label: "Switch subject", handler: () => { closePalette(); switchSubjectAction() } },
-    { label: "Create subject", handler: () => { closePalette(); createSubjectAction() } },
-    { label: "Add materials", handler: () => { closePalette(); addMaterialsAction() } },
-    { label: "Configure provider", handler: () => { closePalette(); void startModelSetup() } },
-    { label: "View progress", handler: () => { closePalette(); viewProgressAction() } },
-    { label: "View sources", handler: () => { closePalette(); viewSourcesAction() } },
-    { label: "Make plan / Replan", handler: () => { closePalette(); planAction() } },
-    { label: "Start exam review", handler: () => { closePalette(); examReviewAction() } },
-    { label: "Help", handler: () => { closePalette(); appendMessage("system", HELP) } },
-    { label: "Quit", handler: () => renderer.destroy() },
-  ]
+  const paletteHandler = (action: ActionDefinition): (() => void) => {
+    const context = { hasCourse: !!course(), hasCourses: props.database.listCourses().length > 0 }
+    if (!isActionAvailable(action, context)) {
+      return () => {
+        closePalette()
+        appendMessage("system", "请先创建或选择一个课程，然后才能使用此功能。")
+      }
+    }
+    switch (action.id) {
+      case "switch_course": return () => { closePalette(); startSwitchSubjectFlow() }
+      case "create_course": return () => { closePalette(); startCreateSubjectFlow() }
+      case "add_materials": return () => { closePalette(); startAddMaterialsFlow() }
+      case "configure_provider": return () => { closePalette(); void startModelSetup() }
+      case "view_progress": return () => { closePalette(); viewProgressAction() }
+      case "view_sources": return () => { closePalette(); viewSourcesAction() }
+      case "make_plan": return () => { closePalette(); planAction() }
+      case "exam_review": return () => { closePalette(); examReviewAction() }
+      case "change_style": return () => { closePalette(); changeStyleAction() }
+      case "help": return () => { closePalette(); appendMessage("system", HELP) }
+      case "quit": return () => renderer.destroy()
+      default: return () => {}
+    }
+  }
+
+  const getPaletteActions = (): PaletteAction[] =>
+    ACTION_REGISTRY.map((action) => ({ label: action.label, handler: paletteHandler(action) }))
 
   const filteredActions = () => {
     const filter = paletteFilter().toLowerCase()
@@ -173,6 +193,15 @@ export function OpenStuApp(props: AppProps) {
   }
 
   const addMaterialsAction = () => {
+    if (!course()) {
+      const courses = props.database.listCourses()
+      if (courses.length > 0) {
+        appendMessage("system", "请先选择一个课程，然后再导入资料。输入 /course <名称> 切换课程。")
+      } else {
+        appendMessage("system", "还没有课程。请先输入 /course new <名称> 创建课程，然后再导入资料。")
+      }
+      return
+    }
     appendMessage("system", "输入 /add <文件路径或 URL> 导入学习资料。")
   }
 
@@ -219,6 +248,51 @@ export function OpenStuApp(props: AppProps) {
     props.database.setCourseMode(course()!.id, "noob")
     props.database.setSessionMode(sessionId()!, "noob")
     appendMessage("system", "已进入考前突击模式。描述考试范围和时间，AI 将优先覆盖高频考点。")
+  }
+
+  const changeStyleAction = () => {
+    if (!course()) {
+      appendMessage("system", "请先创建或选择一个课程。")
+      return
+    }
+    appendMessage("system", `当前主题：${style().theme}。使用 /style theme=<cyan|violet|amber> 切换。`)
+  }
+
+  const startCreateSubjectFlow = () => {
+    setOnboardingFlow({ type: "create_subject" })
+    appendMessage("system", "创建新课程")
+    appendMessage("system", "输入课程名称，按 Enter 确认。按 Esc 取消。")
+    setNotice("创建课程 · 输入名称")
+  }
+
+  const startSwitchSubjectFlow = () => {
+    setOnboardingFlow({ type: "switch_subject" })
+    const courses = props.database.listCourses()
+    if (!courses.length) {
+      appendMessage("system", "还没有任何课程。请先创建课程。")
+      setOnboardingFlow(undefined)
+      return
+    }
+    appendMessage("system", "切换课程")
+    appendMessage("system", courses.map((c, i) => `${i + 1}. ${c.name}${c.id === (course()?.id ?? "") ? "（当前）" : ""}`).join("\n"))
+    appendMessage("system", "输入序号或课程名称，按 Enter 确认。按 Esc 取消。")
+    setNotice("切换课程 · 选择或输入名称")
+  }
+
+  const startAddMaterialsFlow = () => {
+    if (!course()) {
+      const courses = props.database.listCourses()
+      if (courses.length > 0) {
+        appendMessage("system", "请先选择一个课程，然后再导入资料。按 Ctrl+X → Switch subject 切换。")
+      } else {
+        appendMessage("system", "还没有课程。请先按 Ctrl+X → Create subject 创建课程。")
+      }
+      return
+    }
+    setOnboardingFlow({ type: "add_materials" })
+    appendMessage("system", "导入学习资料")
+    appendMessage("system", "粘贴文件路径或 URL，按 Enter 导入。按 Esc 取消。")
+    setNotice("导入资料 · 输入路径或 URL")
   }
 
   const executeDefaultAction = (action: string) => {
@@ -326,6 +400,8 @@ export function OpenStuApp(props: AppProps) {
   useKeyboard((key) => {
     if (key.ctrl && key.name === "x") {
       key.preventDefault()
+      if (startupChoice()) setStartupChoice(null)
+      if (onboardingFlow()) setOnboardingFlow(undefined)
       paletteOpen() ? closePalette() : openPalette()
       return
     }
@@ -390,7 +466,10 @@ export function OpenStuApp(props: AppProps) {
       }
       if (key.name === "return" || key.name === "kpenter") {
         const hasInput = (composer?.plainText ?? "").trim().length > 0
-        if (hasInput) return
+        if (hasInput) {
+          setStartupChoice(null)
+          return
+        }
         key.preventDefault()
         executeStartupChoice()
         return
@@ -410,9 +489,17 @@ export function OpenStuApp(props: AppProps) {
           key.preventDefault()
           setPendingDefaultAction(null)
           executeDefaultAction(action)
+          void submit("开始")
           return
         }
       }
+    }
+
+    if (key.name === "escape" && onboardingFlow()) {
+      key.preventDefault()
+      setOnboardingFlow(undefined)
+      setNotice("已取消")
+      return
     }
 
     if (key.name === "tab") {
@@ -441,6 +528,118 @@ export function OpenStuApp(props: AppProps) {
     messages().find((message) => message.id === id)?.setContent(content)
   }
 
+  const handleOnboardingInput = async (text: string) => {
+    const flow = onboardingFlow()
+    if (!flow) return
+
+    if (flow.type === "create_subject") {
+      setOnboardingFlow(undefined)
+      const name = text.trim()
+      if (!name) {
+        appendMessage("system", "课程名称不能为空。")
+        return
+      }
+      const newCourse = props.database.createCourse(name)
+      const nextSession = props.database.createSession(newCourse.id, newCourse.mode)
+      setCourse(newCourse)
+      setSessionId(nextSession)
+      setMode(newCourse.mode)
+      setStyle(props.database.getStylePreferences(newCourse.id))
+      setMessages([createDisplayMessage("system", `已创建并进入课程：${newCourse.name}`)])
+      setNotice("课程已创建")
+      return
+    }
+
+    if (flow.type === "switch_subject") {
+      setOnboardingFlow(undefined)
+      const courses = props.database.listCourses()
+      const input = text.trim()
+      const indexMatch = /^\d+$/.test(input)
+      const target = indexMatch
+        ? courses[Number.parseInt(input) - 1]
+        : courses.find((c) => c.name.toLowerCase() === input.toLowerCase())
+      if (!target) {
+        appendMessage("system", "找不到匹配的课程。请检查名称或序号。")
+        return
+      }
+      const nextSession = props.database.createSession(target.id, target.mode)
+      setCourse(target)
+      setSessionId(nextSession)
+      setMode(target.mode)
+      setStyle(props.database.getStylePreferences(target.id))
+      setMessages([createDisplayMessage("system", `已进入课程：${target.name}`)])
+      setNotice("已切换课程")
+      return
+    }
+
+    if (flow.type === "add_materials") {
+      setOnboardingFlow(undefined)
+      if (!course()) return
+      const input = text.trim()
+      setGenerating(true)
+      setNotice("正在导入…")
+      try {
+        const results = await props.sourceService.import(course()!.id, [input], setNotice)
+        appendMessage(
+          "system",
+          results.map((result) => result.status === "imported" ? `已导入 ${result.title}（${result.chunks} 个片段）` : `导入失败 ${result.input}：${result.error}`).join("\n"),
+        )
+        setNotice("导入完成")
+        const imported = results.some((r) => r.status === "imported")
+        if (imported && course()) {
+          const hasPlan = props.database.listPlan(course()!.id).length > 0
+          if (!hasPlan) {
+            appendMessage("system", "资料已导入，现在可以创建学习计划了。按 Ctrl+X → Make plan / Replan 开始。")
+          }
+        }
+      } finally {
+        setGenerating(false)
+      }
+      return
+    }
+  }
+
+  const directAsk = async (text: string) => {
+    if (!props.model.config || !props.model.connected) {
+      appendMessage("system", "尚未配置模型。按 Ctrl+X → Configure provider 开始连接。")
+      return
+    }
+    appendMessage("user", text)
+    const assistantId = appendMessage("assistant", "")
+    const controller = new AbortController()
+    setAbortController(controller)
+    setGenerating(true)
+    setNotice("Ask 正在生成…")
+    let streamed = ""
+    try {
+      const result = await props.model.streamReply(
+        {
+          mode: "ask",
+          input: text,
+          courseName: "General",
+          brief: {},
+          history: [],
+          sources: [],
+          style: style(),
+          signal: controller.signal,
+        },
+        (delta) => {
+          streamed += delta
+          updateMessage(assistantId, streamed)
+        },
+      )
+      updateMessage(assistantId, result)
+      setNotice("回答完成")
+    } catch (error) {
+      const cancelled = controller.signal.aborted
+      updateMessage(assistantId, cancelled ? `${streamed}\n\n[已取消]`.trim() : `错误：${formatError(error)}`)
+      setNotice(cancelled ? "已取消" : "请求失败")
+    } finally {
+      setGenerating(false)
+      setAbortController(undefined)
+    }
+  }
+
   const submit = async (value: string) => {
     const text = value.trim()
     if (!text || generating()) return
@@ -453,8 +652,16 @@ export function OpenStuApp(props: AppProps) {
       await handleModelSetup(text)
       return
     }
+    if (onboardingFlow()) {
+      await handleOnboardingInput(text)
+      return
+    }
 
     if (!course()) {
+      if (mode() === "ask") {
+        await directAsk(text)
+        return
+      }
       appendMessage("system", "还没有选择课程。按 Ctrl+X 创建或选择一个课程。")
       return
     }
@@ -825,7 +1032,7 @@ export function OpenStuApp(props: AppProps) {
               changeMode(key.shift ? -1 : 1)
             }}
             keyBindings={COMPOSER_KEY_BINDINGS}
-            placeholder={modelSetup()?.step === "key" ? "粘贴 API Key（不会保存）" : generating() ? "生成中，Ctrl+C 取消…" : "输入消息或按 Ctrl+X"}
+            placeholder={modelSetup()?.step === "key" ? "粘贴 API Key（不会保存）" : onboardingFlow()?.type === "add_materials" ? "粘贴文件路径或 URL…" : onboardingFlow()?.type === "create_subject" ? "输入课程名称…" : onboardingFlow()?.type === "switch_subject" ? "输入序号或课程名称…" : generating() ? "生成中，Ctrl+C 取消…" : "输入消息或按 Ctrl+X"}
             placeholderColor={palette().muted}
             backgroundColor={palette().inputBackground}
             focusedBackgroundColor={palette().inputBackground}

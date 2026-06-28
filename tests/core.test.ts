@@ -7,7 +7,7 @@ import {
   nextClarification,
   validateClarification,
 } from "../src/core/clarification"
-import { applyDiagnosis, nextReviewAt, validateDiagnosis } from "../src/core/learning"
+import { applyDiagnosis, nextReviewAt, REVIEW_INTERVAL_DAYS, validateDiagnosis } from "../src/core/learning"
 import { switchMode } from "../src/core/modes"
 import type { AssessmentRubric, DiagnosisCandidate, TopicProgress, ValidatedDiagnosis } from "../src/core/types"
 import { loadModelConfig } from "../src/adapters/model"
@@ -109,5 +109,34 @@ describe("learning progress", () => {
     expect(validateDiagnosis({ ...candidate, evidenceQuotes: ["不存在"] }, rubric, "答案是 F=ma", 0).valid).toBe(false)
     const due = nextReviewAt(4, "2026-06-28T00:00:00.000Z", new Date("2026-06-27T00:00:00.000Z"))
     expect(due).toBe("2026-06-28T00:00:00.000Z")
+  })
+
+  test("Ask mode never triggers any learning state change", () => {
+    const progression = [0, 1, 2, 3, 4]
+    for (const stage of progression) {
+      const state: TopicProgress = {
+        topicId: "t1",
+        stage,
+        attemptCount: 0,
+        mastery: "unseen",
+        hintLevel: 0,
+      }
+      const diagnosis: ValidatedDiagnosis = {
+        topicId: "topic-1",
+        rubricId: "rubric-1",
+        correctness: "correct",
+        hintLevel: 0,
+        confidence: 0.9,
+        observedAnswerSummary: "correct",
+        diagnosisReason: "matches",
+        evidenceQuotes: ["F=ma"],
+        expectedAnswerSummary: "F=ma",
+        stateChange: { fromStage: stage, toStage: Math.min(stage + 1, 4), reason: "correct_no_hint" },
+      }
+      const result = applyDiagnosis(state, diagnosis, "ask")
+      expect(result.stage).toBe(stage)
+      expect(result.attemptCount).toBe(0)
+      expect(result.mastery).toBe("unseen")
+    }
   })
 })
