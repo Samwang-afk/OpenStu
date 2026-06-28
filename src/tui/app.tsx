@@ -407,7 +407,10 @@ export function OpenStuApp(props: AppProps) {
       }
       if (key.name === "return" || key.name === "kpenter") {
         const hasInput = (composer?.plainText ?? "").trim().length > 0
-        if (hasInput) return
+        if (hasInput) {
+          setStartupChoice(null)
+          return
+        }
         key.preventDefault()
         executeStartupChoice()
         return
@@ -427,6 +430,7 @@ export function OpenStuApp(props: AppProps) {
           key.preventDefault()
           setPendingDefaultAction(null)
           executeDefaultAction(action)
+          void submit("开始")
           return
         }
       }
