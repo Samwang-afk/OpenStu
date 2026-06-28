@@ -115,6 +115,11 @@ export function OpenStuApp(props: AppProps) {
     setGenerating(true)
     setNotice(`${modeLabel(mode())} 正在生成…`)
     let streamed = ""
+    let streamTimer: ReturnType<typeof setTimeout> | undefined
+    const flushStream = () => {
+      streamTimer = undefined
+      updateMessage(assistantId, streamed)
+    }
     try {
       const result = await props.tutor.handleTurn({
         courseId: course().id,
@@ -124,14 +129,16 @@ export function OpenStuApp(props: AppProps) {
         signal: controller.signal,
         onDelta(delta) {
           streamed += delta
-          updateMessage(assistantId, streamed)
+          streamTimer ??= setTimeout(flushStream, 80)
         },
       })
+      if (streamTimer) clearTimeout(streamTimer)
       updateMessage(assistantId, result.text)
       if (result.notice) appendMessage("system", result.notice)
       setNotice(result.citations.length ? `引用 ${result.citations.length} 个资料片段` : "回答完成")
     } catch (error) {
       const cancelled = controller.signal.aborted
+      if (streamTimer) clearTimeout(streamTimer)
       updateMessage(assistantId, cancelled ? `${streamed}\n\n[已取消]`.trim() : `错误：${formatError(error)}`)
       setNotice(cancelled ? "已取消当前回答，学习状态未更新" : "请求失败，学习状态未更新")
     } finally {
