@@ -4,6 +4,7 @@ import { OpenStuDatabase } from "./adapters/database"
 import { TutorModel } from "./adapters/model"
 import { TutorService } from "./core/tutor"
 import { SourceService } from "./core/source-service"
+import { decideStartup, type StartupDecision } from "./core/startup"
 import { runTui } from "./tui/app"
 
 const { courseName, sources } = parseArguments(Bun.argv.slice(2))
@@ -43,6 +44,13 @@ try {
     )
   }
 
+  const startupDecision: StartupDecision | null = decideStartup({
+    courses: existingCourses.map((c) => ({ id: c.id, name: c.name })),
+    selectedCourse: course ?? null,
+    planTopics: course ? database.listPlan(course.id) : [],
+    sources: course ? database.listSources(course.id) : [],
+  })
+
   await runTui(
     {
       database,
@@ -52,6 +60,7 @@ try {
       initialCourse: course ?? null,
       initialSessionId: course ? database.createSession(course.id, course.mode) : null,
       initialNotices: notices,
+      initialDecision: startupDecision,
     },
     () => database.close(),
   )
