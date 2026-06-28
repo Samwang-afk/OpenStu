@@ -69,6 +69,7 @@ export interface Citation {
   sourceId: string
   chunkId: string
   locator: string
+  sourceTitle?: string
 }
 
 export interface TopicProgress {
