@@ -9,6 +9,7 @@ import type { TutorService } from "../core/tutor"
 import type { SourceService } from "../core/source-service"
 import { searchOfficialSources } from "../adapters/search"
 import type { StartupDecision, StartupOptionBox } from "../core/startup"
+import { ACTION_REGISTRY, type ActionDefinition } from "./actions"
 
 interface DisplayMessage {
   id: string
@@ -119,18 +120,25 @@ export function OpenStuApp(props: AppProps) {
     setNotice(`已切换到 ${modeLabel(result.mode)} 模式`)
   }
 
-  const getPaletteActions = (): PaletteAction[] => [
-    { label: "Switch subject", handler: () => { closePalette(); switchSubjectAction() } },
-    { label: "Create subject", handler: () => { closePalette(); createSubjectAction() } },
-    { label: "Add materials", handler: () => { closePalette(); addMaterialsAction() } },
-    { label: "Configure provider", handler: () => { closePalette(); void startModelSetup() } },
-    { label: "View progress", handler: () => { closePalette(); viewProgressAction() } },
-    { label: "View sources", handler: () => { closePalette(); viewSourcesAction() } },
-    { label: "Make plan / Replan", handler: () => { closePalette(); planAction() } },
-    { label: "Start exam review", handler: () => { closePalette(); examReviewAction() } },
-    { label: "Help", handler: () => { closePalette(); appendMessage("system", HELP) } },
-    { label: "Quit", handler: () => renderer.destroy() },
-  ]
+  const paletteHandler = (action: ActionDefinition): (() => void) => {
+    switch (action.id) {
+      case "switch_course": return () => { closePalette(); switchSubjectAction() }
+      case "create_course": return () => { closePalette(); createSubjectAction() }
+      case "add_materials": return () => { closePalette(); addMaterialsAction() }
+      case "configure_provider": return () => { closePalette(); void startModelSetup() }
+      case "view_progress": return () => { closePalette(); viewProgressAction() }
+      case "view_sources": return () => { closePalette(); viewSourcesAction() }
+      case "make_plan": return () => { closePalette(); planAction() }
+      case "exam_review": return () => { closePalette(); examReviewAction() }
+      case "change_style": return () => { closePalette(); changeStyleAction() }
+      case "help": return () => { closePalette(); appendMessage("system", HELP) }
+      case "quit": return () => renderer.destroy()
+      default: return () => {}
+    }
+  }
+
+  const getPaletteActions = (): PaletteAction[] =>
+    ACTION_REGISTRY.map((action) => ({ label: action.label, handler: paletteHandler(action) }))
 
   const filteredActions = () => {
     const filter = paletteFilter().toLowerCase()
@@ -219,6 +227,14 @@ export function OpenStuApp(props: AppProps) {
     props.database.setCourseMode(course()!.id, "noob")
     props.database.setSessionMode(sessionId()!, "noob")
     appendMessage("system", "已进入考前突击模式。描述考试范围和时间，AI 将优先覆盖高频考点。")
+  }
+
+  const changeStyleAction = () => {
+    if (!course()) {
+      appendMessage("system", "请先创建或选择一个课程。")
+      return
+    }
+    appendMessage("system", `当前主题：${style().theme}。使用 /style theme=<cyan|violet|amber> 切换。`)
   }
 
   const executeDefaultAction = (action: string) => {
@@ -326,6 +342,7 @@ export function OpenStuApp(props: AppProps) {
   useKeyboard((key) => {
     if (key.ctrl && key.name === "x") {
       key.preventDefault()
+      if (startupChoice()) setStartupChoice(null)
       paletteOpen() ? closePalette() : openPalette()
       return
     }
